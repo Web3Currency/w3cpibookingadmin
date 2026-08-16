@@ -1,0 +1,8 @@
+{
+  "name": "w3cbusinessconsole",
+  "description": "Imported from GitHub: Web3Currency/W3C-PI-Bookings",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
