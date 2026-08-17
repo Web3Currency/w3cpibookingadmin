@@ -38,7 +38,13 @@ const getPiBackend = () => {
 const normalizeUid = (uid: string) => uid.trim().replace(/^@/, "");
 
 const findExistingPayment = async (pi: any, bookingId: string, type: A2UType) => {
-  const payments = await pi.getIncompleteServerPayments();
+  const response = await pi.getIncompleteServerPayments();
+  const payments = Array.isArray(response)
+    ? response
+    : Array.isArray(response?.incomplete_server_payments)
+      ? response.incomplete_server_payments
+      : [];
+
   return payments.find(
     (payment: any) =>
       payment?.metadata?.bookingId === bookingId &&
