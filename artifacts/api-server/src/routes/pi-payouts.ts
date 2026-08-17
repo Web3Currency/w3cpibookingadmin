@@ -37,6 +37,33 @@ const getPiBackend = () => {
 
 const normalizeUid = (uid: string) => uid.trim().replace(/^@/, "");
 
+const describePiError = (err: any): { message: string; detail?: unknown } => {
+  if (err?.isAxiosError) {
+    const data = err.response?.data;
+    const status = err.response?.status;
+    const apiMessage =
+      data?.error_message || data?.error || (typeof data === "string" ? data : undefined);
+    return {
+      message: apiMessage
+        ? `Pi API error${status ? ` (${status})` : ""}: ${apiMessage}`
+        : `Pi API request failed${status ? ` with status ${status}` : ""}: ${err.message}`,
+      detail: data,
+    };
+  }
+
+  const horizonExtras = err?.response?.data?.extras || err?.extras;
+  if (horizonExtras?.result_codes) {
+    const codes = horizonExtras.result_codes;
+    const code = codes.operations?.[0] || codes.transaction || "unknown_error";
+    return {
+      message: `Pi blockchain transaction rejected: ${code}`,
+      detail: horizonExtras,
+    };
+  }
+
+  return { message: err?.message || String(err) };
+};
+
 const findExistingPayment = async (pi: any, bookingId: string, type: A2UType) => {
   const response = await pi.getIncompleteServerPayments();
   const payments = Array.isArray(response)
@@ -89,12 +116,19 @@ const executeA2U = async ({
     );
   }
 
-  const paymentId = await pi.createPayment({
-    amount: Number(amountPi),
-    memo,
-    metadata: { bookingId, type },
-    uid: cleanUid,
-  });
+  let paymentId: string;
+  try {
+    paymentId = await pi.createPayment({
+      amount: Number(amountPi),
+      memo,
+      metadata: { bookingId, type },
+      uid: cleanUid,
+    });
+  } catch (err) {
+    const { message, detail } = describePiError(err);
+    req.log.error({ err: detail ?? err, bookingId, type }, `Pi A2U payment creation failed: ${message}`);
+    throw new Error(message);
+  }
   if (!paymentId) {
     throw new Error("Pi Network did not return a payment identifier.");
   }
@@ -103,18 +137,23 @@ const executeA2U = async ({
   try {
     txid = await pi.submitPayment(paymentId);
   } catch (err) {
-    req.log.error(
-      { err, bookingId, type, paymentId },
-      "Pi A2U blockchain submission failed",
-    );
-    throw err;
+    const { message, detail } = describePiError(err);
+    req.log.error({ err: detail ?? err, bookingId, type, paymentId }, `Pi A2U blockchain submission failed: ${message}`);
+    throw new Error(message);
   }
 
   if (!txid) {
     throw new Error(`Pi Network did not return a transaction ID for ${type}.`);
   }
 
-  await pi.completePayment(paymentId, txid);
+  try {
+    await pi.completePayment(paymentId, txid);
+  } catch (err) {
+    const { message, detail } = describePiError(err);
+    req.log.error({ err: detail ?? err, bookingId, type, paymentId, txid }, `Pi A2U payment completion failed: ${message}`);
+    throw new Error(message);
+  }
+
   return { paymentId, txid };
 };
 
