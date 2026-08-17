@@ -64,6 +64,33 @@ const describePiError = (err: any): { message: string; detail?: unknown } => {
   return { message: err?.message || String(err) };
 };
 
+const getSupabaseConfig = () => {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  return url && key ? { url: url.replace(/\/$/, ""), key } : null;
+};
+
+const lookupBookingClientUid = async (bookingId: string): Promise<string | null> => {
+  const config = getSupabaseConfig();
+  if (!config) return null;
+
+  const url = `${config.url}/rest/v1/bookings?id=eq.${encodeURIComponent(bookingId)}&select=client_pi_uid&limit=1`;
+  const response = await fetch(url, {
+    headers: {
+      apikey: config.key,
+      Authorization: `Bearer ${config.key}`,
+    },
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(text || `Supabase booking lookup failed (${response.status}).`);
+  }
+
+  const rows = (await response.json()) as Array<{ client_pi_uid?: string | null }>;
+  return rows[0]?.client_pi_uid?.trim() || null;
+};
+
 const findExistingPayment = async (pi: any, bookingId: string, type: A2UType) => {
   const response = await pi.getIncompleteServerPayments();
   const payments = Array.isArray(response)
@@ -225,17 +252,28 @@ router.post("/pi/payouts/refund", async (req, res) => {
       .status(400)
       .json({ error: "amountPi must be a positive number." });
   }
-  if (!clientPiUid || typeof clientPiUid !== "string" || !clientPiUid.trim()) {
-    return void res
-      .status(400)
-      .json({ error: "clientPiUid is required." });
-  }
 
   try {
+    const resolvedClientPiUid =
+      typeof clientPiUid === "string" && clientPiUid.trim()
+        ? clientPiUid.trim()
+        : await lookupBookingClientUid(bookingId.trim());
+
+    if (!resolvedClientPiUid) {
+      return void res.status(409).json({
+        error: "Client Pi UID is missing from this booking. The refund cannot be sent safely.",
+      });
+    }
+
+    req.log.info(
+      { bookingId, clientPiUidSource: clientPiUid?.trim() ? "request" : "booking" },
+      "Resolved Pi refund recipient UID",
+    );
+
     const result = await executeA2U({
       bookingId: bookingId.trim(),
       amountPi,
-      uid: clientPiUid,
+      uid: resolvedClientPiUid,
       memo: `Refund for booking ${bookingId.trim()}`,
       type: "refund",
       req,
