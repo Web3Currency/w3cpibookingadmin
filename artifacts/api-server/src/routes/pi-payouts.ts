@@ -41,8 +41,7 @@ const describePiError = (err: any): { message: string; detail?: unknown } => {
   if (err?.isAxiosError) {
     const data = err.response?.data;
     const status = err.response?.status;
-    const apiMessage =
-      data?.error_message || data?.error || (typeof data === "string" ? data : undefined);
+    const apiMessage = data?.error_message || data?.error || (typeof data === "string" ? data : undefined);
     return {
       message: apiMessage
         ? `Pi API error${status ? ` (${status})` : ""}: ${apiMessage}`
@@ -55,10 +54,7 @@ const describePiError = (err: any): { message: string; detail?: unknown } => {
   if (horizonExtras?.result_codes) {
     const codes = horizonExtras.result_codes;
     const code = codes.operations?.[0] || codes.transaction || "unknown_error";
-    return {
-      message: `Pi blockchain transaction rejected: ${code}`,
-      detail: horizonExtras,
-    };
+    return { message: `Pi blockchain transaction rejected: ${code}`, detail: horizonExtras };
   }
 
   return { message: err?.message || String(err) };
@@ -74,13 +70,15 @@ const lookupBookingClientUid = async (bookingId: string): Promise<string | null>
   const config = getSupabaseConfig();
   if (!config) return null;
 
-  const url = `${config.url}/rest/v1/bookings?id=eq.${encodeURIComponent(bookingId)}&select=client_pi_uid&limit=1`;
-  const response = await fetch(url, {
-    headers: {
-      apikey: config.key,
-      Authorization: `Bearer ${config.key}`,
+  const response = await fetch(
+    `${config.url}/rest/v1/bookings?id=eq.${encodeURIComponent(bookingId)}&select=client_pi_uid&limit=1`,
+    {
+      headers: {
+        apikey: config.key,
+        Authorization: `Bearer ${config.key}`,
+      },
     },
-  });
+  );
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
@@ -106,14 +104,7 @@ const findExistingPayment = async (pi: any, bookingId: string, type: A2UType) =>
   );
 };
 
-const executeA2U = async ({
-  bookingId,
-  amountPi,
-  uid,
-  memo,
-  type,
-  req,
-}: {
+const executeA2U = async ({ bookingId, amountPi, uid, memo, type, req }: {
   bookingId: string;
   amountPi: number;
   uid: string;
@@ -130,35 +121,21 @@ const executeA2U = async ({
     const paymentId = existing.identifier;
     const existingTxid = existing.transaction?.txid;
     if (existingTxid) {
-      throw new Error(
-        `An incomplete payment for this ${type} already has a blockchain transaction (${existingTxid}). Resolve it before retrying.`,
-      );
+      throw new Error(`An incomplete payment for this ${type} already has a blockchain transaction (${existingTxid}). Resolve it before retrying.`);
     }
-    req.log.warn(
-      { bookingId, type, paymentId },
-      "Found existing incomplete A2U payment; refusing duplicate",
-    );
-    throw new Error(
-      `An incomplete ${type} payment already exists for this booking (payment ${paymentId}). Resolve that payment before retrying.`,
-    );
+    req.log.warn({ bookingId, type, paymentId }, "Found existing incomplete A2U payment; refusing duplicate");
+    throw new Error(`An incomplete ${type} payment already exists for this booking (payment ${paymentId}). Resolve that payment before retrying.`);
   }
 
   let paymentId: string;
   try {
-    paymentId = await pi.createPayment({
-      amount: Number(amountPi),
-      memo,
-      metadata: { bookingId, type },
-      uid: cleanUid,
-    });
+    paymentId = await pi.createPayment({ amount: Number(amountPi), memo, metadata: { bookingId, type }, uid: cleanUid });
   } catch (err) {
     const { message, detail } = describePiError(err);
     req.log.error({ err: detail ?? err, bookingId, type }, `Pi A2U payment creation failed: ${message}`);
     throw new Error(message);
   }
-  if (!paymentId) {
-    throw new Error("Pi Network did not return a payment identifier.");
-  }
+  if (!paymentId) throw new Error("Pi Network did not return a payment identifier.");
 
   let txid: string;
   try {
@@ -168,10 +145,7 @@ const executeA2U = async ({
     req.log.error({ err: detail ?? err, bookingId, type, paymentId }, `Pi A2U blockchain submission failed: ${message}`);
     throw new Error(message);
   }
-
-  if (!txid) {
-    throw new Error(`Pi Network did not return a transaction ID for ${type}.`);
-  }
+  if (!txid) throw new Error(`Pi Network did not return a transaction ID for ${type}.`);
 
   try {
     await pi.completePayment(paymentId, txid);
@@ -185,90 +159,37 @@ const executeA2U = async ({
 };
 
 router.post("/pi/payouts/release", async (req, res) => {
-  const {
-    bookingId,
-    amountPi,
-    providerPiUid,
-    providerWalletAddress,
-  } = req.body as A2URequest;
-
-  if (!bookingId || typeof bookingId !== "string" || !bookingId.trim()) {
-    return void res.status(400).json({ error: "bookingId is required." });
-  }
-  if (
-    typeof amountPi !== "number" ||
-    !Number.isFinite(amountPi) ||
-    amountPi <= 0
-  ) {
-    return void res
-      .status(400)
-      .json({ error: "amountPi must be a positive number." });
-  }
-  if (
-    !providerPiUid ||
-    typeof providerPiUid !== "string" ||
-    !providerPiUid.trim()
-  ) {
-    return void res
-      .status(400)
-      .json({ error: "providerPiUid is required." });
-  }
+  const { bookingId, amountPi, providerPiUid, providerWalletAddress } = req.body as A2URequest;
+  if (!bookingId || typeof bookingId !== "string" || !bookingId.trim()) return void res.status(400).json({ error: "bookingId is required." });
+  if (typeof amountPi !== "number" || !Number.isFinite(amountPi) || amountPi <= 0) return void res.status(400).json({ error: "amountPi must be a positive number." });
+  if (!providerPiUid || typeof providerPiUid !== "string" || !providerPiUid.trim()) return void res.status(400).json({ error: "providerPiUid is required." });
 
   try {
-    const result = await executeA2U({
-      bookingId: bookingId.trim(),
-      amountPi,
-      uid: providerPiUid,
-      memo: `Escrow payout for booking ${bookingId.trim()}`,
-      type: "payout",
-      req,
-    });
-    res.status(200).json({
-      success: true,
-      txid: result.txid,
-      paymentId: result.paymentId,
-      providerWalletAddress: providerWalletAddress || undefined,
-    });
+    const result = await executeA2U({ bookingId: bookingId.trim(), amountPi, uid: providerPiUid, memo: `Escrow payout for booking ${bookingId.trim()}`, type: "payout", req });
+    res.status(200).json({ success: true, txid: result.txid, paymentId: result.paymentId, providerWalletAddress: providerWalletAddress || undefined });
   } catch (err: any) {
     req.log.error({ err, bookingId }, "A2U payout failed");
-    res.status(500).json({
-      error: err?.message || "Failed to process Pi A2U payout.",
-    });
+    res.status(500).json({ error: err?.message || "Failed to process Pi A2U payout." });
   }
 });
 
 router.post("/pi/payouts/refund", async (req, res) => {
   const { bookingId, amountPi, clientPiUid } = req.body as A2URequest;
-
-  if (!bookingId || typeof bookingId !== "string" || !bookingId.trim()) {
-    return void res.status(400).json({ error: "bookingId is required." });
-  }
-  if (
-    typeof amountPi !== "number" ||
-    !Number.isFinite(amountPi) ||
-    amountPi <= 0
-  ) {
-    return void res
-      .status(400)
-      .json({ error: "amountPi must be a positive number." });
-  }
+  if (!bookingId || typeof bookingId !== "string" || !bookingId.trim()) return void res.status(400).json({ error: "bookingId is required." });
+  if (typeof amountPi !== "number" || !Number.isFinite(amountPi) || amountPi <= 0) return void res.status(400).json({ error: "amountPi must be a positive number." });
 
   try {
-    const resolvedClientPiUid =
-      typeof clientPiUid === "string" && clientPiUid.trim()
-        ? clientPiUid.trim()
-        : await lookupBookingClientUid(bookingId.trim());
+    // The provider UI historically sent clientPiUsername in this field. Never trust that as a Pi UID.
+    // Resolve the authoritative UID stored on the booking first.
+    const storedClientPiUid = await lookupBookingClientUid(bookingId.trim());
+    const requestLooksLikeUid = typeof clientPiUid === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clientPiUid.trim());
+    const resolvedClientPiUid = storedClientPiUid || (requestLooksLikeUid ? clientPiUid!.trim() : null);
 
     if (!resolvedClientPiUid) {
-      return void res.status(409).json({
-        error: "Client Pi UID is missing from this booking. The refund cannot be sent safely.",
-      });
+      return void res.status(409).json({ error: "Client Pi UID is missing from this booking. The refund cannot be sent safely." });
     }
 
-    req.log.info(
-      { bookingId, clientPiUidSource: clientPiUid?.trim() ? "request" : "booking" },
-      "Resolved Pi refund recipient UID",
-    );
+    req.log.info({ bookingId, clientPiUidSource: storedClientPiUid ? "booking" : "validated_request" }, "Resolved Pi refund recipient UID");
 
     const result = await executeA2U({
       bookingId: bookingId.trim(),
@@ -278,16 +199,10 @@ router.post("/pi/payouts/refund", async (req, res) => {
       type: "refund",
       req,
     });
-    res.status(200).json({
-      success: true,
-      txid: result.txid,
-      paymentId: result.paymentId,
-    });
+    res.status(200).json({ success: true, txid: result.txid, paymentId: result.paymentId });
   } catch (err: any) {
     req.log.error({ err, bookingId }, "A2U refund failed");
-    res.status(500).json({
-      error: err?.message || "Failed to process Pi A2U refund.",
-    });
+    res.status(500).json({ error: err?.message || "Failed to process Pi A2U refund." });
   }
 });
 
